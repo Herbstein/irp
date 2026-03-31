@@ -1,0 +1,14 @@
+[package]
+name = "irp-reader"
+version = "0.1.0"
+edition = "2024"
+
+[features]
+default = ["windows-mmap"]
+windows-mmap = ["dep:windows"]
+
+[dependencies]
+thiserror = "2.0.18"
+
+[target.'cfg(windows)'.dependencies]
+windows = { version = "0.62.2", optional = true, features = ["Win32_System_Memory", "Win32_System_Threading"] }
