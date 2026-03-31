@@ -152,6 +152,7 @@ impl TelemetrySource for FileReplaySource {
             frame.tick_count,
             frame.buf.clone(),
             Instant::now(),
+            None,
         )))
     }
 }

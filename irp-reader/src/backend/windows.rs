@@ -1,4 +1,4 @@
-use std::{collections::HashMap, ffi::CString, time::Instant};
+use std::{cell::Cell, collections::HashMap, ffi::CString, time::Instant};
 
 use windows::{
     Win32::{
@@ -184,6 +184,7 @@ pub struct WindowsMmapSource {
     data_valid_event: Event,
     var_map: HashMap<String, VarHeader>,
     buf_len: usize,
+    last_session_info_update: Cell<i32>,
 }
 
 impl WindowsMmapSource {
@@ -219,6 +220,7 @@ impl WindowsMmapSource {
             data_valid_event,
             var_map,
             buf_len,
+            last_session_info_update: Cell::new(-1),
         })
     }
 }
@@ -282,9 +284,43 @@ impl TelemetrySource for WindowsMmapSource {
 
             let tick_after = unsafe { std::ptr::read_volatile(&varbuf.tick_count) };
 
-            if tick_before == tick_after {
-                return Ok(Some(Snapshot::new(tick_before, snapshot, signaled_at)));
+            if tick_before != tick_after {
+                continue;
             }
+
+            let last_session_info_update = self.last_session_info_update.get();
+            let current_session_info_update_before =
+                unsafe { std::ptr::read_volatile(&(*header_ptr).session_info_update) };
+            let session_info = if last_session_info_update != current_session_info_update_before {
+                let session_info_offset =
+                    unsafe { std::ptr::read_volatile(&(*header_ptr).session_info_offset) } as usize;
+                let session_info_len =
+                    unsafe { std::ptr::read_volatile(&(*header_ptr).session_info_len) } as usize;
+
+                Some(unsafe {
+                    self.mem_map
+                        .as_slice::<u8>(session_info_offset, session_info_len)
+                        .to_vec()
+                })
+            } else {
+                None
+            };
+
+            let current_session_info_update_after =
+                unsafe { std::ptr::read_volatile(&(*header_ptr).session_info_update) };
+            if current_session_info_update_before != current_session_info_update_after {
+                continue;
+            }
+
+            self.last_session_info_update
+                .set(current_session_info_update_before);
+
+            return Ok(Some(Snapshot::new(
+                tick_before,
+                snapshot,
+                signaled_at,
+                session_info,
+            )));
         }
 
         Err(IrpReaderError::InconsistentFrame)

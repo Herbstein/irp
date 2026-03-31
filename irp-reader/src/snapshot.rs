@@ -51,14 +51,21 @@ pub struct Snapshot {
     tick_count: i32,
     buf: Vec<u8>,
     signaled_at: Instant,
+    session_info: Option<Vec<u8>>,
 }
 
 impl Snapshot {
-    pub fn new(tick_count: i32, buf: Vec<u8>, signaled_at: Instant) -> Self {
+    pub fn new(
+        tick_count: i32,
+        buf: Vec<u8>,
+        signaled_at: Instant,
+        session_info: Option<Vec<u8>>,
+    ) -> Self {
         Self {
             tick_count,
             buf,
             signaled_at,
+            session_info,
         }
     }
 
@@ -72,5 +79,9 @@ impl Snapshot {
 
     pub fn signaled_at(&self) -> Instant {
         self.signaled_at
+    }
+
+    pub fn session_info(&self) -> Option<&[u8]> {
+        self.session_info.as_deref()
     }
 }
