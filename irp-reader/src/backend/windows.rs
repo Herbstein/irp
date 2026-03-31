@@ -12,8 +12,8 @@ use windows::{
 };
 
 use crate::{
-    snapshot::{Snapshot, TrackedVar, VarType},
     error::IrpReaderError,
+    snapshot::{Snapshot, TrackedVar, VarType},
     source::TelemetrySource,
 };
 
@@ -264,6 +264,7 @@ impl TelemetrySource for WindowsMmapSource {
         for _ in 0..max_retries + 1 {
             let header_ptr = self.mem_map.view.Value.cast::<irsdk_header>();
             let num_buf = unsafe { std::ptr::read_volatile(&(*header_ptr).num_buf) } as usize;
+            let num_buf = num_buf.min(MAX_VAR_BUFS);
 
             let var_bufs = unsafe { &(&(*header_ptr).var_buf)[..num_buf] };
             let varbuf = var_bufs
