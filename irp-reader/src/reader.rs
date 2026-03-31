@@ -1,6 +1,6 @@
 use crate::{
-    snapshot::{Snapshot, TrackedVar, VarType},
     error::IrpReaderError,
+    snapshot::{Snapshot, TrackedVar, VarType},
 };
 
 pub struct SnapshotReader<'a> {
@@ -72,29 +72,29 @@ impl<'a> SnapshotReader<'a> {
         let var = self.find_var(name)?;
         Self::expect_type(var, VarType::Float, "a float")?;
 
-        read_typed_array::<f32>(self.snapshot.buf(), var.offset, var.count)
+        Self::read_typed_array::<f32>(self.snapshot.buf(), var.offset, var.count)
             .ok_or_else(|| IrpReaderError::OutOfBounds(name.to_string()))
     }
 
     pub fn get_int_array(&self, name: &str) -> Result<Vec<i32>, IrpReaderError> {
         let var = self.find_var(name)?;
         Self::expect_type(var, VarType::Int, "an int")?;
-        read_typed_array::<i32>(self.snapshot.buf(), var.offset, var.count)
+        Self::read_typed_array::<i32>(self.snapshot.buf(), var.offset, var.count)
             .ok_or_else(|| IrpReaderError::OutOfBounds(name.to_string()))
     }
-}
 
-fn read_typed_array<T: Copy>(buf: &[u8], offset: usize, count: usize) -> Option<Vec<T>> {
-    let elem_size = size_of::<T>();
-    let end = offset + elem_size * count;
-    if end > buf.len() {
-        return None;
+    fn read_typed_array<T: Copy>(buf: &[u8], offset: usize, count: usize) -> Option<Vec<T>> {
+        let elem_size = size_of::<T>();
+        let end = offset + elem_size * count;
+        if end > buf.len() {
+            return None;
+        }
+        let mut values = Vec::with_capacity(count);
+        for i in 0..count {
+            let elem_offset = offset + i * elem_size;
+            let v = unsafe { (buf.as_ptr().add(elem_offset) as *const T).read_unaligned() };
+            values.push(v);
+        }
+        Some(values)
     }
-    let mut values = Vec::with_capacity(count);
-    for i in 0..count {
-        let elem_offset = offset + i * elem_size;
-        let v = unsafe { (buf.as_ptr().add(elem_offset) as *const T).read_unaligned() };
-        values.push(v);
-    }
-    Some(values)
 }
