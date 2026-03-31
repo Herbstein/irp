@@ -1,9 +1,6 @@
 use irp_reader::{
-    backend::WindowsMmapSource,
-    error::IrpReaderError,
-    query::{FromTelemetrySnapshot, TelemetryQuery},
-    reader::SnapshotReader,
-    source::TelemetrySource,
+    FromTelemetrySnapshot, IrpReaderError, SnapshotReader, TelemetryQuery, TelemetrySource,
+    WindowsMmapSource,
 };
 
 #[derive(Debug)]

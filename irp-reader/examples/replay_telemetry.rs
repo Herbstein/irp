@@ -1,9 +1,6 @@
 use irp_reader::{
-    backend::FileReplaySource,
-    error::IrpReaderError,
-    query::{FromTelemetrySnapshot, TelemetryQuery},
-    reader::SnapshotReader,
-    source::TelemetrySource,
+    FileReplaySource, FromTelemetrySnapshot, IrpReaderError, SnapshotReader, TelemetryQuery,
+    TelemetrySource,
 };
 
 #[derive(Debug)]

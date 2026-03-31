@@ -1,7 +1,4 @@
-use irp_reader::{
-    backend::WindowsMmapSource, error::IrpReaderError, recorder::TelemetryRecorder,
-    source::TelemetrySource,
-};
+use irp_reader::{IrpReaderError, TelemetryRecorder, TelemetrySource, WindowsMmapSource};
 
 fn main() -> Result<(), IrpReaderError> {
     let source = WindowsMmapSource::connect()?;
