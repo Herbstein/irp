@@ -135,7 +135,7 @@ impl TelemetrySource for FileReplaySource {
             .collect()
     }
 
-    fn wait_for_snapshot(&self, _max_retries: u32) -> Result<Option<Snapshot>, IrpReaderError> {
+    fn wait_for_snapshot(&self) -> Result<Option<Snapshot>, IrpReaderError> {
         let idx = self.cursor.get();
         if idx >= self.frames.len() {
             return Ok(None);

@@ -27,7 +27,7 @@ fn main() -> Result<(), IrpReaderError> {
 
     let telemetry = TelemetryQuery::<CarTelemetry>::new(&source)?;
 
-    while let Some(snapshot) = source.wait_for_snapshot(0)? {
+    while let Some(snapshot) = source.wait_for_snapshot()? {
         let telemetry = telemetry.deserialize(&snapshot)?;
 
         let elapsed = snapshot.signaled_at().elapsed();

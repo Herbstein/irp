@@ -54,6 +54,13 @@ impl<'a> SnapshotReader<'a> {
             .ok_or_else(|| IrpReaderError::OutOfBounds(var.name.to_string()))
     }
 
+    pub fn get_bool(&self, name: &str) -> Result<bool, IrpReaderError> {
+        let var = self.find_scalar(name)?;
+        Self::expect_type(var, VarType::Bool, "a bool")?;
+        let bytes = self.scalar_bytes(var)?;
+        Ok(bytes[0] != 0)
+    }
+
     pub fn get_float(&self, name: &str) -> Result<f32, IrpReaderError> {
         let var = self.find_scalar(name)?;
         Self::expect_type(var, VarType::Float, "a float")?;

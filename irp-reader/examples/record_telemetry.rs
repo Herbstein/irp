@@ -5,7 +5,7 @@ fn main() -> Result<(), IrpReaderError> {
 
     let mut recorder = TelemetryRecorder::create("session.irp", &source)?;
 
-    while let Some(snapshot) = source.wait_for_snapshot(0)? {
+    while let Some(snapshot) = source.wait_for_snapshot()? {
         recorder.record(&snapshot)?;
 
         let elapsed = snapshot.signaled_at().elapsed();

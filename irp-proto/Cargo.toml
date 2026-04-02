@@ -1,0 +1,16 @@
+[package]
+name = "irp-proto"
+version = "0.1.0"
+edition = "2024"
+
+[features]
+server = ["tonic/server"]
+client = ["tonic/channel"]
+
+[dependencies]
+prost = "0.14.3"
+tonic = { version = "0.14.5", default-features = false, features = ["codegen"] }
+tonic-prost = "0.14.5"
+
+[build-dependencies]
+tonic-prost-build = "0.14.5"

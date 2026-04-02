@@ -2,13 +2,13 @@ use std::{cell::Cell, collections::HashMap, ffi::CString, time::Instant};
 
 use windows::{
     Win32::{
-        Foundation::{HANDLE, WAIT_OBJECT_0},
+        Foundation::{ERROR_FILE_NOT_FOUND, HANDLE, WAIT_OBJECT_0, WAIT_TIMEOUT},
         System::{
             Memory::{FILE_MAP_READ, MEMORY_MAPPED_VIEW_ADDRESS},
-            Threading::{INFINITE, SYNCHRONIZATION_SYNCHRONIZE},
+            Threading::SYNCHRONIZATION_SYNCHRONIZE,
         },
     },
-    core::PCSTR,
+    core::{HRESULT, PCSTR},
 };
 
 use crate::{
@@ -113,7 +113,14 @@ impl MemMap {
                 false,
                 PCSTR::from_raw(name.as_ptr() as _),
             )
-        }?;
+        };
+        let handle = match handle {
+            Ok(handle) => handle,
+            Err(err) if err.code() == HRESULT::from_win32(ERROR_FILE_NOT_FOUND.0) => {
+                return Err(IrpReaderError::MemoryMapMissing);
+            }
+            Err(err) => return Err(IrpReaderError::Windows(err)),
+        };
 
         let view = unsafe {
             windows::Win32::System::Memory::MapViewOfFile(handle, FILE_MAP_READ, 0, 0, 0)
@@ -160,14 +167,15 @@ impl Event {
         Ok(Self { handle })
     }
 
-    pub fn wait(&self) -> Result<Instant, IrpReaderError> {
-        let result = unsafe {
-            windows::Win32::System::Threading::WaitForSingleObject(self.handle, INFINITE)
-        };
-        if result != WAIT_OBJECT_0 {
-            return Err(IrpReaderError::WaitFailed);
+    pub fn wait(&self) -> Result<Option<Instant>, IrpReaderError> {
+        let result =
+            unsafe { windows::Win32::System::Threading::WaitForSingleObject(self.handle, 500) };
+        match result {
+            WAIT_OBJECT_0 => {}
+            WAIT_TIMEOUT => return Ok(None),
+            _ => return Err(IrpReaderError::WaitFailed),
         }
-        Ok(Instant::now())
+        Ok(Some(Instant::now()))
     }
 }
 
@@ -189,10 +197,8 @@ pub struct WindowsMmapSource {
 
 impl WindowsMmapSource {
     pub fn connect() -> Result<Self, IrpReaderError> {
-        let data_valid_event = Event::open(DATA_VALID_EVENT_NAME)?;
         let mem_map = MemMap::open(MEM_MAP_NAME)?;
-
-        data_valid_event.wait()?;
+        let data_valid_event = Event::open(DATA_VALID_EVENT_NAME)?;
 
         let header = unsafe { mem_map.as_ref::<irsdk_header>(0) };
 
@@ -260,69 +266,68 @@ impl TelemetrySource for WindowsMmapSource {
             .collect()
     }
 
-    fn wait_for_snapshot(&self, max_retries: u32) -> Result<Option<Snapshot>, IrpReaderError> {
-        let signaled_at = self.data_valid_event.wait()?;
+    fn wait_for_snapshot(&self) -> Result<Option<Snapshot>, IrpReaderError> {
+        let signaled_at = match self.data_valid_event.wait()? {
+            Some(signaled_at) => signaled_at,
+            None => return Ok(None),
+        };
 
-        for _ in 0..max_retries + 1 {
-            let header_ptr = self.mem_map.view.Value.cast::<irsdk_header>();
-            let num_buf = unsafe { std::ptr::read_volatile(&(*header_ptr).num_buf) } as usize;
-            let num_buf = num_buf.min(MAX_VAR_BUFS);
+        let header_ptr = self.mem_map.view.Value.cast::<irsdk_header>();
+        let num_buf = unsafe { std::ptr::read_volatile(&(*header_ptr).num_buf) } as usize;
+        let num_buf = num_buf.min(MAX_VAR_BUFS);
 
-            let var_bufs = unsafe { &(&(*header_ptr).var_buf)[..num_buf] };
-            let varbuf = var_bufs
-                .iter()
-                .max_by_key(|vb| unsafe { std::ptr::read_volatile(&vb.tick_count) })
-                .ok_or(IrpReaderError::NoVarBufs)?;
-            let tick_before = unsafe { std::ptr::read_volatile(&varbuf.tick_count) };
-            let buf_offset = unsafe { std::ptr::read_volatile(&varbuf.buf_offset) } as usize;
+        let var_bufs = unsafe { &(&(*header_ptr).var_buf)[..num_buf] };
+        let varbuf = var_bufs
+            .iter()
+            .max_by_key(|vb| unsafe { std::ptr::read_volatile(&vb.tick_count) })
+            .ok_or(IrpReaderError::NoVarBufs)?;
+        let tick_before = unsafe { std::ptr::read_volatile(&varbuf.tick_count) };
+        let buf_offset = unsafe { std::ptr::read_volatile(&varbuf.buf_offset) } as usize;
 
-            let snapshot = unsafe {
-                self.mem_map
-                    .as_slice::<u8>(buf_offset, self.buf_len)
-                    .to_vec()
-            };
+        let snapshot = unsafe {
+            self.mem_map
+                .as_slice::<u8>(buf_offset, self.buf_len)
+                .to_vec()
+        };
 
-            let tick_after = unsafe { std::ptr::read_volatile(&varbuf.tick_count) };
+        let tick_after = unsafe { std::ptr::read_volatile(&varbuf.tick_count) };
 
-            if tick_before != tick_after {
-                continue;
-            }
-
-            let last_session_info_update = self.last_session_info_update.get();
-            let current_session_info_update_before =
-                unsafe { std::ptr::read_volatile(&(*header_ptr).session_info_update) };
-            let session_info = if last_session_info_update != current_session_info_update_before {
-                let session_info_offset =
-                    unsafe { std::ptr::read_volatile(&(*header_ptr).session_info_offset) } as usize;
-                let session_info_len =
-                    unsafe { std::ptr::read_volatile(&(*header_ptr).session_info_len) } as usize;
-
-                Some(unsafe {
-                    self.mem_map
-                        .as_slice::<u8>(session_info_offset, session_info_len)
-                        .to_vec()
-                })
-            } else {
-                None
-            };
-
-            let current_session_info_update_after =
-                unsafe { std::ptr::read_volatile(&(*header_ptr).session_info_update) };
-            if current_session_info_update_before != current_session_info_update_after {
-                continue;
-            }
-
-            self.last_session_info_update
-                .set(current_session_info_update_before);
-
-            return Ok(Some(Snapshot::new(
-                tick_before,
-                snapshot,
-                signaled_at,
-                session_info,
-            )));
+        if tick_before != tick_after {
+            return Ok(None);
         }
 
-        Err(IrpReaderError::InconsistentFrame)
+        let last_session_info_update = self.last_session_info_update.get();
+        let current_session_info_update_before =
+            unsafe { std::ptr::read_volatile(&(*header_ptr).session_info_update) };
+        let session_info = if last_session_info_update != current_session_info_update_before {
+            let session_info_offset =
+                unsafe { std::ptr::read_volatile(&(*header_ptr).session_info_offset) } as usize;
+            let session_info_len =
+                unsafe { std::ptr::read_volatile(&(*header_ptr).session_info_len) } as usize;
+
+            Some(unsafe {
+                self.mem_map
+                    .as_slice::<u8>(session_info_offset, session_info_len)
+                    .to_vec()
+            })
+        } else {
+            None
+        };
+
+        let current_session_info_update_after =
+            unsafe { std::ptr::read_volatile(&(*header_ptr).session_info_update) };
+        if current_session_info_update_before != current_session_info_update_after {
+            return Ok(None);
+        }
+
+        self.last_session_info_update
+            .set(current_session_info_update_before);
+
+        Ok(Some(Snapshot::new(
+            tick_before,
+            snapshot,
+            signaled_at,
+            session_info,
+        )))
     }
 }

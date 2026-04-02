@@ -1,9 +1,9 @@
 use std::marker::PhantomData;
 
 use crate::{
-    snapshot::{Snapshot, TrackedVar},
     error::IrpReaderError,
     reader::SnapshotReader,
+    snapshot::{Snapshot, TrackedVar},
     source::TelemetrySource,
 };
 

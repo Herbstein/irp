@@ -28,6 +28,8 @@ pub enum IrpReaderError {
     WaitFailed,
     #[error("Replay ended")]
     EndOfReplay,
+    #[error("iRacing memory map not found")]
+    MemoryMapMissing,
 
     #[error(transparent)]
     #[cfg(feature = "windows-mmap")]
