@@ -25,7 +25,15 @@ pub fn sim_reader(state: State) {
                 .expect("State lock poisoned")
                 .sim_connected = true;
 
-            let live_data_query = TelemetryQuery::<LiveData>::new(&source).unwrap();
+            let live_data_query = match TelemetryQuery::<LiveData>::new(&source) {
+                Ok(query) => query,
+                Err(IrpReaderError::UnknownVariable(_)) => {
+                    println!("Waiting for iRacing...");
+                    thread::sleep(Duration::from_secs(1));
+                    continue;
+                }
+                Err(err) => panic!("Failed to create telemetry query: {}", err),
+            };
 
             let mut consecutive_empty = 0;
 
@@ -53,8 +61,6 @@ pub fn sim_reader(state: State) {
                         let session_info = serde_yaml::from_slice(session_info).unwrap();
                         daemon_state.latest_session_info = Some(session_info);
                     };
-                    // TODO(herbstein): Implement lap completion logic
-                    // daemon_state.pending_lap_summaries.push(LapSummary {});
                     daemon_state.latest_telemetry = Some(live_data);
                 }
 

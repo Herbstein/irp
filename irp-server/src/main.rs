@@ -70,9 +70,6 @@ impl Irp for IrpService {
                             })
                             .ok();
                     }
-                    Some(foo_bar_request::Msg::Summary(summary)) => {
-                        println!("Summary received: {}", summary.summaries.len());
-                    }
                     _ => continue,
                 }
 

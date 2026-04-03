@@ -13,25 +13,18 @@ message Handshake {
 
 message CarTelemetry {
   float lapPct = 1;
+  float fuelLevel = 2;
+  float fuelLevelPct = 3;
 }
 
 message Telemetry {
   repeated CarTelemetry cars = 1;
 }
 
-message CarSummary {
-  float laptime = 1;
-}
-
-message LapSummary {
-  repeated CarSummary summaries = 1;
-}
-
 message FooBarRequest {
   oneof msg {
     Handshake handshake = 1;
     Telemetry telemetry = 2;
-    LapSummary summary = 3;
   }
 }
 

@@ -20,19 +20,19 @@ pub async fn connect(state: State) {
 
         let outbound = async_stream::stream! {
             let mut was_connected = false;
+            let mut hero_car_idx = 0;
 
             loop {
                 state.notify.notified().await;
 
-                let (session_info, summaries, telemetry, connected) = {
+                let (session_info, telemetry, connected) = {
                     let mut daemon_state = state.state.lock().expect("Poisoned state lock");
 
-                    let session_info = daemon_state.latest_session_info.take();
-                    let summaries = std::mem::take(&mut daemon_state.pending_lap_summaries);
+                    let session_info = daemon_state.latest_session_info.clone();
                     let telemetry = daemon_state.latest_telemetry.take();
                     let connected = daemon_state.sim_connected;
 
-                    (session_info, summaries, telemetry, connected)
+                    (session_info, telemetry, connected)
                 };
 
                 if !connected {
@@ -46,8 +46,10 @@ pub async fn connect(state: State) {
                         Some(session_info) => {
                             was_connected = true;
 
+                            hero_car_idx = session_info.driver_info.driver_car_idx as usize;
+
                             let subsessionid = session_info.weekend_info.sub_session_id;
-                            let custid = session_info.driver_info.drivers[session_info.driver_info.driver_car_idx as usize].user_id;
+                            let custid = session_info.driver_info.drivers[hero_car_idx].user_id;
 
                             yield irp::FooBarRequest {
                                 msg: Some(foo_bar_request::Msg::Handshake(irp::Handshake {
@@ -60,23 +62,23 @@ pub async fn connect(state: State) {
                     }
                 }
 
-                for summary in summaries {
-                    yield irp::FooBarRequest {
-                        msg: Some(foo_bar_request::Msg::Summary(irp::LapSummary {summaries: vec![]}))
-                    }
-                }
+
 
                 if let Some(data) = telemetry {
-                    let cars = data
-                        .car_idx_lap_dist_pct
-                        .into_iter()
-                        .map(|lap_dist_pct| irp::CarTelemetry {
+                    let mut telem_data = Vec::with_capacity(data.car_idx_lap_dist_pct.len());
+
+                    for car_idx in 0..data.car_idx_lap_dist_pct.len() {
+                        let lap_dist_pct = data.car_idx_lap_dist_pct[car_idx];
+
+                        telem_data.push(irp::CarTelemetry {
                             lap_pct: lap_dist_pct,
-                        })
-                        .collect();
+                            fuel_level: if car_idx == hero_car_idx { data.fuel_level } else { 0.0 },
+                            fuel_level_pct: if car_idx == hero_car_idx { data.fuel_level_pct } else { 0.0 },
+                        });
+                    }
 
                     yield irp::FooBarRequest {
-                        msg: Some(foo_bar_request::Msg::Telemetry(irp::Telemetry { cars }))
+                        msg: Some(foo_bar_request::Msg::Telemetry(irp::Telemetry { cars: telem_data }))
                     }
                 }
             }
@@ -91,5 +93,7 @@ pub async fn connect(state: State) {
         let mut inbound = response.into_inner();
 
         while inbound.next().await.is_some() {}
+
+        println!("Connection closed, retrying...");
     }
 }

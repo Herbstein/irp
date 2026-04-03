@@ -2,7 +2,7 @@ use std::sync::{Arc, Mutex};
 
 use irp_reader::{FromTelemetrySnapshot, IrpReaderError, SnapshotReader};
 use serde::Deserialize;
-use tokio::sync::{Notify, watch};
+use tokio::sync::Notify;
 
 mod connection;
 mod sim_reader;
@@ -11,15 +11,19 @@ mod sim_reader;
 pub struct LiveData {
     is_on_track: bool,
     car_idx_lap_dist_pct: Vec<f32>,
+    fuel_level: f32,
+    fuel_level_pct: f32,
 }
 
 impl FromTelemetrySnapshot for LiveData {
-    const REQUIRED_VARS: &[&str] = &["CarIdxLapDistPct", "IsOnTrack"];
+    const REQUIRED_VARS: &[&str] = &["CarIdxLapDistPct", "IsOnTrack", "FuelLevel", "FuelLevelPct"];
 
     fn from_snapshot(reader: &SnapshotReader) -> Result<Self, IrpReaderError> {
         Ok(LiveData {
             is_on_track: reader.get_bool("IsOnTrack")?,
             car_idx_lap_dist_pct: reader.get_float_array("CarIdxLapDistPct")?,
+            fuel_level: reader.get_float("FuelLevel")?,
+            fuel_level_pct: reader.get_float("FuelLevelPct")?,
         })
     }
 }
@@ -55,12 +59,8 @@ pub struct SessionInfo {
 }
 
 #[derive(Clone)]
-pub struct LapSummary {}
-
-#[derive(Clone)]
 struct DaemonState {
     latest_session_info: Option<SessionInfo>,
-    pending_lap_summaries: Vec<LapSummary>,
     latest_telemetry: Option<LiveData>,
     sim_connected: bool,
 }
@@ -77,7 +77,6 @@ async fn main() {
     let state = Arc::new(Shared {
         state: Mutex::new(DaemonState {
             latest_session_info: None,
-            pending_lap_summaries: Vec::new(),
             latest_telemetry: None,
             sim_connected: false,
         }),
