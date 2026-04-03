@@ -192,7 +192,8 @@ pub struct WindowsMmapSource {
     data_valid_event: Event,
     var_map: HashMap<String, VarHeader>,
     buf_len: usize,
-    last_session_info_update: Cell<i32>,
+    last_session_info_update: i32,
+    session_info_scratch: Vec<u8>,
 }
 
 impl WindowsMmapSource {
@@ -221,12 +222,16 @@ impl WindowsMmapSource {
             .map(|header| (header.name.to_string(), header))
             .collect();
 
+        let session_info_len = header.session_info_len as usize;
+        let session_info_scratch = vec![0; session_info_len];
+
         Ok(Self {
             mem_map,
             data_valid_event,
             var_map,
             buf_len,
-            last_session_info_update: Cell::new(-1),
+            last_session_info_update: -1,
+            session_info_scratch,
         })
     }
 }
@@ -266,7 +271,7 @@ impl TelemetrySource for WindowsMmapSource {
             .collect()
     }
 
-    fn wait_for_snapshot(&self) -> Result<Option<Snapshot>, IrpReaderError> {
+    fn wait_for_snapshot(&mut self) -> Result<Option<Snapshot>, IrpReaderError> {
         let signaled_at = match self.data_valid_event.wait()? {
             Some(signaled_at) => signaled_at,
             None => return Ok(None),
@@ -296,7 +301,7 @@ impl TelemetrySource for WindowsMmapSource {
             return Ok(None);
         }
 
-        let last_session_info_update = self.last_session_info_update.get();
+        let last_session_info_update = self.last_session_info_update;
         let current_session_info_update_before =
             unsafe { std::ptr::read_volatile(&(*header_ptr).session_info_update) };
         let session_info = if last_session_info_update != current_session_info_update_before {
@@ -305,11 +310,15 @@ impl TelemetrySource for WindowsMmapSource {
             let session_info_len =
                 unsafe { std::ptr::read_volatile(&(*header_ptr).session_info_len) } as usize;
 
-            Some(unsafe {
+            self.session_info_scratch.copy_from_slice(unsafe {
                 self.mem_map
                     .as_slice::<u8>(session_info_offset, session_info_len)
-                    .to_vec()
-            })
+            });
+
+            match memchr::memchr(0, &self.session_info_scratch) {
+                Some(pos) => Some(self.session_info_scratch[..pos].to_vec()),
+                None => None,
+            }
         } else {
             None
         };
@@ -320,8 +329,7 @@ impl TelemetrySource for WindowsMmapSource {
             return Ok(None);
         }
 
-        self.last_session_info_update
-            .set(current_session_info_update_before);
+        self.last_session_info_update = current_session_info_update_before;
 
         Ok(Some(Snapshot::new(
             tick_before,

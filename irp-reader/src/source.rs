@@ -10,5 +10,5 @@ pub trait TelemetrySource {
 
     fn track(&self, names: &[&str]) -> Result<Vec<TrackedVar>, IrpReaderError>;
 
-    fn wait_for_snapshot(&self) -> Result<Option<Snapshot>, IrpReaderError>;
+    fn wait_for_snapshot(&mut self) -> Result<Option<Snapshot>, IrpReaderError>;
 }

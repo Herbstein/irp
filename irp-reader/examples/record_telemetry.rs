@@ -1,7 +1,7 @@
 use irp_reader::{IrpReaderError, TelemetryRecorder, TelemetrySource, WindowsMmapSource};
 
 fn main() -> Result<(), IrpReaderError> {
-    let source = WindowsMmapSource::connect()?;
+    let mut source = WindowsMmapSource::connect()?;
 
     let mut recorder = TelemetryRecorder::create("session.irp", &source)?;
 

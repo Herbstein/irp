@@ -8,6 +8,7 @@ default = ["windows-mmap"]
 windows-mmap = ["dep:windows"]
 
 [dependencies]
+memchr = "2.8.0"
 thiserror = "2.0.18"
 
 [target.'cfg(windows)'.dependencies]

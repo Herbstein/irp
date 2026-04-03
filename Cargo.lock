@@ -440,6 +440,7 @@ dependencies = [
 name = "irp-reader"
 version = "0.1.0"
 dependencies = [
+ "memchr",
  "thiserror",
  "windows",
 ]

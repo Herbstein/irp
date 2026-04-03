@@ -39,7 +39,7 @@ async fn main() {
 
     thread::spawn(move || {
         loop {
-            let source = match WindowsMmapSource::connect() {
+            let mut source = match WindowsMmapSource::connect() {
                 Ok(source) => source,
                 Err(IrpReaderError::MemoryMapMissing) | Err(IrpReaderError::UnknownVariable(_)) => {
                     println!("Waiting for iRacing...");

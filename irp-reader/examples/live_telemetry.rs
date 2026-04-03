@@ -23,7 +23,7 @@ impl FromTelemetrySnapshot for CarTelemetry {
 }
 
 fn main() -> Result<(), IrpReaderError> {
-    let source = WindowsMmapSource::connect()?;
+    let mut source = WindowsMmapSource::connect()?;
 
     let telemetry = TelemetryQuery::<CarTelemetry>::new(&source)?;
 

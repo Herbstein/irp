@@ -31,7 +31,7 @@ struct RecordedFrame {
 pub struct FileReplaySource {
     vars: HashMap<String, VarDescriptor>,
     frames: Vec<RecordedFrame>,
-    cursor: Cell<usize>,
+    cursor: usize,
     realtime: bool,
     buf_len: usize,
 }
@@ -93,7 +93,7 @@ impl FileReplaySource {
         Ok(Self {
             vars,
             frames,
-            cursor: Cell::new(0),
+            cursor: 0,
             realtime,
             buf_len,
         })
@@ -135,14 +135,14 @@ impl TelemetrySource for FileReplaySource {
             .collect()
     }
 
-    fn wait_for_snapshot(&self) -> Result<Option<Snapshot>, IrpReaderError> {
-        let idx = self.cursor.get();
+    fn wait_for_snapshot(&mut self) -> Result<Option<Snapshot>, IrpReaderError> {
+        let idx = self.cursor;
         if idx >= self.frames.len() {
             return Ok(None);
         }
 
         let frame = &self.frames[idx];
-        self.cursor.set(idx + 1);
+        self.cursor = idx + 1;
 
         if self.realtime && idx > 0 {
             thread::sleep(frame.delay);

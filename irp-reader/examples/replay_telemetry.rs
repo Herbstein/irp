@@ -21,7 +21,7 @@ impl FromTelemetrySnapshot for RacePositions {
 }
 
 fn main() -> Result<(), IrpReaderError> {
-    let source = FileReplaySource::open("session.irp", true)?;
+    let mut source = FileReplaySource::open("session.irp", true)?;
 
     let positions = TelemetryQuery::<RacePositions>::new(&source)?;
 
