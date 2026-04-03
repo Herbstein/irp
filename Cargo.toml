@@ -1,3 +1,3 @@
 [workspace]
-members = ["irp-daemon", "irp-proto", "irp-reader"]
+members = ["irp-daemon", "irp-proto", "irp-reader", "irp-server"]
 resolver = "3"
