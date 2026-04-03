@@ -1,18 +1,39 @@
 use std::pin::Pin;
 
 use async_stream::try_stream;
-use axum::Router;
-use futures_util::{Stream, StreamExt};
+use axum::{
+    Extension, Json, Router,
+    extract::{
+        WebSocketUpgrade,
+        ws::{Message, WebSocket},
+    },
+    response::IntoResponse,
+    routing::{any, get},
+};
+use futures_util::{SinkExt, Stream, StreamExt};
 use irp_proto::irp::{
     FooBarRequest, FooBarResponse, HandshakeAck, foo_bar_request, foo_bar_response,
     irp_server::{Irp, IrpServer},
 };
-use tokio::net::TcpListener;
+use serde::Serialize;
+use tokio::{net::TcpListener, sync::broadcast};
 use tonic::{async_trait, transport::Server};
 use tower_http::services::ServeDir;
 
+#[derive(Clone, Serialize)]
+struct CarTelemetry {
+    lap_pct: f32,
+}
+
+#[derive(Clone, Serialize)]
+struct Telemetry {
+    cars: Vec<CarTelemetry>,
+}
+
 #[derive(Debug)]
-struct IrpService;
+struct IrpService {
+    sender: broadcast::Sender<Telemetry>,
+}
 
 #[async_trait]
 impl Irp for IrpService {
@@ -24,8 +45,10 @@ impl Irp for IrpService {
         request: tonic::Request<tonic::codec::Streaming<FooBarRequest>>,
     ) -> Result<tonic::Response<Self::FooBarStream>, tonic::Status> {
         let mut stream = request.into_inner();
+        let sender = self.sender.clone();
 
         let output = try_stream! {
+
             while let Some(request) = stream.next().await {
                 let request = request?;
                 match request.msg {
@@ -37,7 +60,15 @@ impl Irp for IrpService {
                         yield response;
                     }
                     Some(foo_bar_request::Msg::Telemetry(telemetry)) => {
-                        println!("Telemetry received: {}", telemetry.cars.len());
+                        sender
+                            .send(Telemetry {
+                                cars: telemetry
+                                    .cars
+                                    .into_iter()
+                                    .map(|c| CarTelemetry { lap_pct: c.lap_pct })
+                                    .collect(),
+                            })
+                            .ok();
                     }
                     Some(foo_bar_request::Msg::Summary(summary)) => {
                         println!("Summary received: {}", summary.summaries.len());
@@ -52,11 +83,26 @@ impl Irp for IrpService {
     }
 }
 
+#[derive(Clone)]
+struct ReceiverProvider {
+    sender: broadcast::Sender<Telemetry>,
+}
+
+impl ReceiverProvider {
+    pub fn get_receiver(&self) -> broadcast::Receiver<Telemetry> {
+        self.sender.subscribe()
+    }
+}
+
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let grpc_addr = "127.0.0.1:50051".parse()?;
 
-    let irp = IrpService;
+    let (telemetry_tx, _) = broadcast::channel(10);
+
+    let irp = IrpService {
+        sender: telemetry_tx.clone(),
+    };
 
     let service = IrpServer::new(irp);
 
@@ -68,7 +114,13 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     });
 
     let http = tokio::spawn(async move {
-        let app = Router::new().fallback_service(ServeDir::new("."));
+        let app = Router::new()
+            .route("/ws", any(ws_handler))
+            .route("/api/next", get(next_handler))
+            .layer(Extension(ReceiverProvider {
+                sender: telemetry_tx,
+            }))
+            .fallback_service(ServeDir::new("dist/"));
         let listener = TcpListener::bind("127.0.0.1:8080").await?;
         axum::serve(listener, app).await
     });
@@ -79,4 +131,34 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     http_result?;
 
     Ok(())
+}
+
+async fn next_handler(Extension(provider): Extension<ReceiverProvider>) -> Json<Telemetry> {
+    let mut receiver = provider.get_receiver();
+    let telemetry = receiver.recv().await.unwrap();
+    Json(telemetry)
+}
+
+async fn ws_handler(
+    ws: WebSocketUpgrade,
+    Extension(provider): Extension<ReceiverProvider>,
+) -> impl IntoResponse {
+    let receiver = provider.get_receiver();
+    ws.on_upgrade(move |socket| handle_socket(socket, receiver))
+}
+
+async fn handle_socket(socket: WebSocket, mut receiver: broadcast::Receiver<Telemetry>) {
+    let (mut sender, _) = socket.split();
+
+    while let Ok(telemetry) = receiver.recv().await {
+        if sender
+            .send(Message::Text(
+                serde_json::to_string(&telemetry).unwrap().into(),
+            ))
+            .await
+            .is_err()
+        {
+            break;
+        }
+    }
 }
