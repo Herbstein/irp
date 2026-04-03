@@ -1,4 +1,4 @@
-use std::{cell::Cell, collections::HashMap, ffi::CString, time::Instant};
+use std::{collections::HashMap, ffi::CString, time::Instant};
 
 use windows::{
     Win32::{
