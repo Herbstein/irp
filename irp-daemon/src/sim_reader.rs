@@ -1,11 +1,10 @@
 use std::{thread, time::Duration};
 
 use irp_reader::{IrpReaderError, TelemetryQuery, TelemetrySource, WindowsMmapSource};
-use tokio::sync::mpsc;
 
-use crate::{IrpMessage, LiveData};
+use crate::{LiveData, State};
 
-pub fn sim_reader(sender: mpsc::UnboundedSender<IrpMessage>) {
+pub fn sim_reader(state: State) {
     thread::spawn(move || {
         loop {
             let mut source = match WindowsMmapSource::connect() {
@@ -19,6 +18,12 @@ pub fn sim_reader(sender: mpsc::UnboundedSender<IrpMessage>) {
             };
 
             println!("Sim connected");
+
+            state
+                .state
+                .lock()
+                .expect("State lock poisoned")
+                .sim_connected = true;
 
             let live_data_query = TelemetryQuery::<LiveData>::new(&source).unwrap();
 
@@ -41,15 +46,29 @@ pub fn sim_reader(sender: mpsc::UnboundedSender<IrpMessage>) {
 
                 let live_data = live_data_query.deserialize(&snapshot).unwrap();
 
-                if snapshot.session_info().is_some() {
-                    println!("Session info received (Tick={})", snapshot.tick_count());
-                    sender.send(IrpMessage::SessionInfo).unwrap();
-                };
+                {
+                    let mut daemon_state = state.state.lock().expect("Poisoned state lock");
+                    if let Some(session_info) = snapshot.session_info() {
+                        println!("Session info received (Tick={})", snapshot.tick_count());
+                        let session_info = serde_yaml::from_slice(session_info).unwrap();
+                        daemon_state.latest_session_info = Some(session_info);
+                    };
+                    // TODO(herbstein): Implement lap completion logic
+                    // daemon_state.pending_lap_summaries.push(LapSummary {});
+                    daemon_state.latest_telemetry = Some(live_data);
+                }
 
-                sender.send(IrpMessage::Telemetry(live_data)).unwrap();
+                // Store a permit in the Notify, making the next call return immediately
+                state.notify.notify_one();
             }
 
-            println!("Sim disconnected")
+            println!("Sim disconnected");
+
+            state
+                .state
+                .lock()
+                .expect("State lock disconnected")
+                .sim_connected = false;
         }
     });
 }
