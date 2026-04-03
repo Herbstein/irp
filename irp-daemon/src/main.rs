@@ -5,8 +5,8 @@ use irp_proto::irp::{
     CarTelemetry, FooBarRequest, Handshake, Telemetry, foo_bar_request, irp_client::IrpClient,
 };
 use irp_reader::{
-    FromTelemetrySnapshot, IrpReaderError, Snapshot, SnapshotReader, TelemetryQuery,
-    TelemetrySource, WindowsMmapSource,
+    FromTelemetrySnapshot, IrpReaderError, SnapshotReader, TelemetryQuery, TelemetrySource,
+    WindowsMmapSource,
 };
 
 #[derive(Clone, Debug)]
