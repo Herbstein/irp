@@ -2,23 +2,27 @@ use std::pin::Pin;
 
 use async_stream::try_stream;
 use axum::{
-    Extension, Json, Router,
+    Extension, Router,
     extract::{
         WebSocketUpgrade,
         ws::{Message, WebSocket},
     },
     response::IntoResponse,
-    routing::{any, get},
+    routing::any,
 };
-use futures_util::{SinkExt, Stream, StreamExt};
+use futures_util::{SinkExt, Stream, StreamExt, TryStreamExt};
 use irp_proto::irp::{
     FooBarRequest, FooBarResponse, HandshakeAck, foo_bar_request, foo_bar_response,
     irp_server::{Irp, IrpServer},
 };
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use tokio::{net::TcpListener, sync::broadcast};
 use tonic::{async_trait, transport::Server};
 use tower_http::services::ServeDir;
+
+use crate::registry::DaemonRegistry;
+
+mod registry;
 
 #[derive(Clone, Serialize)]
 struct CarTelemetry {
@@ -43,9 +47,8 @@ struct Driver {
     user_name: String,
 }
 
-#[derive(Debug)]
 struct IrpService {
-    sender: broadcast::Sender<Telemetry>,
+    daemon_registry: DaemonRegistry,
 }
 
 #[async_trait]
@@ -58,17 +61,21 @@ impl Irp for IrpService {
         request: tonic::Request<tonic::codec::Streaming<FooBarRequest>>,
     ) -> Result<tonic::Response<Self::FooBarStream>, tonic::Status> {
         let mut stream = request.into_inner();
-        let sender = self.sender.clone();
+
+        let registry = self.daemon_registry.clone();
 
         let output = try_stream! {
             let mut hero_car_idx = -1;
             let mut drivers = Vec::new();
+
+            let mut sender = None;
 
             while let Some(request) = stream.next().await {
                 let request = request?;
                 match request.msg {
                     Some(foo_bar_request::Msg::Handshake(handshake)) => {
                         println!("Handshake received: custid={}, subsessionid={}", handshake.custid, handshake.subsessionid);
+                        sender = Some(registry.register(handshake.custid));
                         let response = FooBarResponse {
                             msg: Some(foo_bar_response::Msg::HandshakeAck(HandshakeAck {}))
                         };
@@ -81,9 +88,12 @@ impl Irp for IrpService {
                             continue;
                         }
 
-                        let hero = match telemetry.hero {
-                            Some(hero) => hero,
-                            None => continue,
+                        let Some(hero) = telemetry.hero else {
+                            continue;
+                        };
+
+                        let Some(sender) = &sender else {
+                            continue;
                         };
 
                         sender
@@ -110,7 +120,6 @@ impl Irp for IrpService {
                     }
                     None => continue,
                 }
-
             }
         };
 
@@ -118,25 +127,14 @@ impl Irp for IrpService {
     }
 }
 
-#[derive(Clone)]
-struct ReceiverProvider {
-    sender: broadcast::Sender<Telemetry>,
-}
-
-impl ReceiverProvider {
-    pub fn get_receiver(&self) -> broadcast::Receiver<Telemetry> {
-        self.sender.subscribe()
-    }
-}
-
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let grpc_addr = "127.0.0.1:50051".parse()?;
 
-    let (telemetry_tx, _) = broadcast::channel(10);
+    let daemon_registry = DaemonRegistry::new();
 
     let irp = IrpService {
-        sender: telemetry_tx.clone(),
+        daemon_registry: daemon_registry.clone(),
     };
 
     let service = IrpServer::new(irp);
@@ -151,10 +149,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let http = tokio::spawn(async move {
         let app = Router::new()
             .route("/ws", any(ws_handler))
-            .route("/api/next", get(next_handler))
-            .layer(Extension(ReceiverProvider {
-                sender: telemetry_tx,
-            }))
+            .layer(Extension(daemon_registry))
             .fallback_service(ServeDir::new("dist/"));
         let listener = TcpListener::bind("127.0.0.1:8080").await?;
         axum::serve(listener, app).await
@@ -168,33 +163,131 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     Ok(())
 }
 
-async fn next_handler(Extension(provider): Extension<ReceiverProvider>) -> Json<Telemetry> {
-    let mut receiver = provider.get_receiver();
-    let telemetry = receiver.recv().await.unwrap();
-    Json(telemetry)
-}
-
 async fn ws_handler(
     ws: WebSocketUpgrade,
-    Extension(provider): Extension<ReceiverProvider>,
+    Extension(registry): Extension<DaemonRegistry>,
 ) -> impl IntoResponse {
-    ws.on_upgrade(move |socket| handle_socket(socket, provider))
+    ws.on_upgrade(move |socket| handle_socket(socket, registry))
 }
 
-async fn handle_socket(socket: WebSocket, provider: ReceiverProvider) {
-    let (mut sender, _) = socket.split();
+#[derive(Serialize)]
+#[serde(tag = "type", content = "data")]
+enum WsMessage {
+    #[serde(rename = "list_daemons")]
+    Daemons { daemons: Vec<i32> },
+    #[serde(rename = "telemetry")]
+    Telemetry { telemetry: Telemetry },
+}
 
-    let mut receiver = provider.get_receiver();
+#[derive(Deserialize)]
+#[serde(tag = "type", content = "data")]
+enum WsRequest {
+    #[serde(rename = "select_daemon")]
+    SelectDaemon(i32),
+}
 
-    while let Ok(telemetry) = receiver.recv().await {
-        if sender
-            .send(Message::Text(
-                serde_json::to_string(&telemetry).unwrap().into(),
-            ))
-            .await
-            .is_err()
-        {
-            break;
+enum WsState {
+    WaitingForSelection,
+    Listening {
+        receiver: broadcast::Receiver<Telemetry>,
+    },
+}
+
+async fn handle_socket(socket: WebSocket, registry: DaemonRegistry) {
+    let (mut ws_sender, ws_receiver) = socket.split();
+
+    let ws_receiver = ws_receiver
+        .map_err(|_| ())
+        .try_filter_map(async |msg| match msg {
+            Message::Text(text) => {
+                let request = serde_json::from_str::<WsRequest>(&text).map_err(|_| ())?;
+                Ok(Some(request))
+            }
+            _ => Err(()),
+        });
+    let mut ws_receiver = Box::pin(ws_receiver);
+
+    let mut registry_receiver = registry.subscribe();
+
+    let msg = serde_json::to_string(&WsMessage::Daemons {
+        daemons: registry_receiver.borrow_and_update().clone(),
+    })
+    .unwrap();
+    ws_sender.send(Message::Text(msg.into())).await.unwrap();
+
+    let mut state = WsState::WaitingForSelection;
+
+    loop {
+        match &mut state {
+            WsState::WaitingForSelection => {
+                tokio::select! {
+                    request = ws_receiver.next() => {
+                        match request {
+                            Some(Ok(WsRequest::SelectDaemon(custid))) => {
+                                let new_receiver = registry.receiver(custid);
+                                match new_receiver {
+                                    Some(receiver) => {
+                                        state = WsState::Listening { receiver };
+                                    }
+                                    None => {
+                                        // TODO(herbstein): Respond with an error
+                                    }
+                                }
+                            }
+                            _ => break,
+                        }
+                    }
+                    result = registry_receiver.changed() => {
+                        if result.is_err() {
+                            break;
+                        }
+                        let daemons = registry_receiver.borrow_and_update().clone();
+                        let msg = serde_json::to_string(&WsMessage::Daemons { daemons }).unwrap();
+                        if ws_sender.send(Message::Text(msg.into())).await.is_err() {
+                            break;
+                        }
+                    }
+                }
+            }
+            WsState::Listening { receiver } => {
+                tokio::select! {
+                    result = receiver.recv() => {
+                        match result {
+                            Ok(telemetry) => {
+                                let msg = serde_json::to_string(&WsMessage::Telemetry { telemetry }).unwrap();
+                                if ws_sender.send(Message::Text(msg.into())).await.is_err() {
+                                    break;
+                                }
+                            }
+                            Err(broadcast::error::RecvError::Lagged(_)) => {}
+                            Err(broadcast::error::RecvError::Closed) => {
+                                // Daemon disconnected, go back to selection
+                                state = WsState::WaitingForSelection;
+                            }
+                        }
+                    }
+                    request = ws_receiver.next() => {
+                        match request {
+                            Some(Ok(WsRequest::SelectDaemon(custid))) => {
+                                if let Some(new_receiver) = registry.receiver(custid) {
+                                    state = WsState::Listening { receiver: new_receiver };
+                                }
+                            }
+                            _ => break,
+                        }
+                    }
+                    result = registry_receiver.changed() => {
+                        if result.is_err() {
+                            break;
+                        }
+                        let daemons = registry_receiver.borrow_and_update().clone();
+                        let msg = serde_json::to_string(&WsMessage::Daemons { daemons }).unwrap();
+                        if ws_sender.send(Message::Text(msg.into())).await.is_err() {
+                            break;
+                        }
+                    }
+                }
+            }
         }
     }
 }
