@@ -30,6 +30,8 @@ impl FromTelemetrySnapshot for LiveData {
 
 #[derive(Clone, Deserialize)]
 pub struct WeekendInfo {
+    #[serde(rename = "TrackID")]
+    track_id: i32,
     #[serde(rename = "SubSessionID")]
     sub_session_id: i32,
 }
@@ -40,6 +42,8 @@ pub struct Driver {
     car_idx: i32,
     #[serde(rename = "UserID")]
     user_id: i32,
+    #[serde(rename = "UserName")]
+    user_name: String,
 }
 
 #[derive(Clone, Deserialize)]
@@ -59,8 +63,37 @@ pub struct SessionInfo {
 }
 
 #[derive(Clone)]
+enum SessionState {
+    New(SessionInfo),
+    Existing(SessionInfo),
+    None,
+}
+
+impl SessionState {
+    pub fn is_new(&self) -> bool {
+        matches!(self, SessionState::New(_))
+    }
+
+    pub fn session_info(&self) -> Option<&SessionInfo> {
+        match self {
+            SessionState::Existing(session_info) => Some(session_info),
+            _ => None,
+        }
+    }
+
+    pub fn take_session_info(&mut self) -> Option<SessionInfo> {
+        match std::mem::replace(self, SessionState::None) {
+            SessionState::New(session_info) | SessionState::Existing(session_info) => {
+                Some(session_info)
+            }
+            _ => None,
+        }
+    }
+}
+
+#[derive(Clone)]
 struct DaemonState {
-    latest_session_info: Option<SessionInfo>,
+    session_info: SessionState,
     latest_telemetry: Option<LiveData>,
     sim_connected: bool,
 }
@@ -76,7 +109,7 @@ type State = Arc<Shared>;
 async fn main() {
     let state = Arc::new(Shared {
         state: Mutex::new(DaemonState {
-            latest_session_info: None,
+            session_info: SessionState::None,
             latest_telemetry: None,
             sim_connected: false,
         }),

@@ -2,7 +2,7 @@ use std::{thread, time::Duration};
 
 use irp_reader::{IrpReaderError, TelemetryQuery, TelemetrySource, WindowsMmapSource};
 
-use crate::{LiveData, State};
+use crate::{LiveData, SessionState, State};
 
 pub fn sim_reader(state: State) {
     thread::spawn(move || {
@@ -54,12 +54,20 @@ pub fn sim_reader(state: State) {
 
                 let live_data = live_data_query.deserialize(&snapshot).unwrap();
 
+                if !live_data.is_on_track {
+                    continue;
+                }
+
                 {
                     let mut daemon_state = state.state.lock().expect("Poisoned state lock");
                     if let Some(session_info) = snapshot.session_info() {
                         println!("Session info received (Tick={})", snapshot.tick_count());
                         let session_info = serde_yaml::from_slice(session_info).unwrap();
-                        daemon_state.latest_session_info = Some(session_info);
+                        daemon_state.session_info = SessionState::New(session_info);
+                    } else if let Some(session_info) =
+                        daemon_state.session_info.take_session_info()
+                    {
+                        daemon_state.session_info = SessionState::Existing(session_info);
                     };
                     daemon_state.latest_telemetry = Some(live_data);
                 }

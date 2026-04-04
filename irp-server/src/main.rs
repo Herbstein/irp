@@ -26,8 +26,21 @@ struct CarTelemetry {
 }
 
 #[derive(Clone, Serialize)]
+struct HeroTelemetry {
+    fuel_level: f32,
+    fuel_level_pct: f32,
+}
+
+#[derive(Clone, Serialize)]
 struct Telemetry {
     cars: Vec<CarTelemetry>,
+    hero: HeroTelemetry,
+    hero_car_idx: i32,
+}
+
+struct Driver {
+    car_idx: i32,
+    user_name: String,
 }
 
 #[derive(Debug)]
@@ -48,6 +61,8 @@ impl Irp for IrpService {
         let sender = self.sender.clone();
 
         let output = try_stream! {
+            let mut hero_car_idx = -1;
+            let mut drivers = Vec::new();
 
             while let Some(request) = stream.next().await {
                 let request = request?;
@@ -60,6 +75,17 @@ impl Irp for IrpService {
                         yield response;
                     }
                     Some(foo_bar_request::Msg::Telemetry(telemetry)) => {
+                        // We don't know the hero car idx yet, so ignore telemetry until we do. This should arrive very early
+                        if hero_car_idx == -1 {
+                            println!("Ignoring telemetry until hero car idx is known");
+                            continue;
+                        }
+
+                        let hero = match telemetry.hero {
+                            Some(hero) => hero,
+                            None => continue,
+                        };
+
                         sender
                             .send(Telemetry {
                                 cars: telemetry
@@ -67,10 +93,22 @@ impl Irp for IrpService {
                                     .into_iter()
                                     .map(|c| CarTelemetry { lap_pct: c.lap_pct })
                                     .collect(),
+                                hero: HeroTelemetry {
+                                    fuel_level: hero.fuel_level,
+                                    fuel_level_pct: hero.fuel_level_pct,
+                                },
+                                hero_car_idx,
                             })
                             .ok();
                     }
-                    _ => continue,
+                    Some(foo_bar_request::Msg::SessionInfo(session_info)) => {
+                        if let Some(driver_info) = session_info.driver_info {
+                            hero_car_idx = driver_info.driver_car_idx;
+                            drivers = driver_info.drivers.into_iter().map(|d| Driver { car_idx: d.car_idx, user_name: d.user_name }).collect();
+                            drivers.sort_unstable_by_key(|d| d.car_idx);
+                        }
+                    }
+                    None => continue,
                 }
 
             }
@@ -140,12 +178,13 @@ async fn ws_handler(
     ws: WebSocketUpgrade,
     Extension(provider): Extension<ReceiverProvider>,
 ) -> impl IntoResponse {
-    let receiver = provider.get_receiver();
-    ws.on_upgrade(move |socket| handle_socket(socket, receiver))
+    ws.on_upgrade(move |socket| handle_socket(socket, provider))
 }
 
-async fn handle_socket(socket: WebSocket, mut receiver: broadcast::Receiver<Telemetry>) {
+async fn handle_socket(socket: WebSocket, provider: ReceiverProvider) {
     let (mut sender, _) = socket.split();
+
+    let mut receiver = provider.get_receiver();
 
     while let Ok(telemetry) = receiver.recv().await {
         if sender

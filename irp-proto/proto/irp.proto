@@ -7,24 +7,49 @@ service IRP {
 }
 
 message Handshake {
-  uint32 custid = 1;
-  uint64 subsessionid = 2;
+  int32 custid = 1;
+  int32 subsessionid = 2;
 }
 
 message CarTelemetry {
   float lapPct = 1;
+}
+
+message HeroTelemetry {
   float fuelLevel = 2;
   float fuelLevelPct = 3;
 }
 
 message Telemetry {
   repeated CarTelemetry cars = 1;
+  HeroTelemetry hero = 2;
+}
+
+message WeekendInfo {
+  int32 TrackID = 1;
+  int32 SubSessionID = 2;
+}
+
+message Driver {
+  int32 CarIdx = 1;
+  string UserName = 2;
+}
+
+message DriverInfo {
+  int32 DriverCarIdx = 1;
+  repeated Driver Drivers = 2;
+}
+
+message SessionInfo {
+  WeekendInfo weekendInfo = 1;
+  DriverInfo driverInfo = 2;
 }
 
 message FooBarRequest {
   oneof msg {
     Handshake handshake = 1;
     Telemetry telemetry = 2;
+    SessionInfo sessionInfo = 3;
   }
 }
 
